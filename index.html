@@ -336,6 +336,9 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-ui);font-size:
 .eamt{font-family:var(--font-bn);font-weight:500;color:var(--ink);white-space:nowrap;}
 .edel{cursor:pointer;color:var(--ink-4);font-size:14px;line-height:1;transition:color .15s;padding:0 2px;flex-shrink:0;}
 .edel:hover{color:var(--neg);}
+.eedit{cursor:pointer;color:var(--ink-4);font-size:12px;line-height:1;transition:color .15s;padding:0 2px;flex-shrink:0;opacity:0;}
+.erow:hover .eedit{opacity:1;}
+.eedit:hover{color:var(--accent);}
 
 /* ── HISTORY ── */
 .history-month{background:var(--bg-1);border:1px solid var(--line);border-radius:14px;margin-bottom:10px;overflow:hidden;}
@@ -2072,7 +2075,14 @@ function renderCatCards(){
       <div class="entries-list">${entries.map((e,i)=>{
         const initials=e.user?e.user.slice(0,2).toUpperCase():'';
         const avatarHtml=e.user?`<span class="eavatar" style="background:${e.userColor||'#888'};color:#0f0f0f;" title="${e.user}">${initials}</span>`:'';
-        return`<div class="erow"><span class="edate">${fmtDate(e.date)}</span>${avatarHtml}<span class="edesc">${e.desc||'—'}</span><span class="eamt">${fmt(e.amount)}</span><span class="edel" data-cat="${cat.id}" data-idx="${i}">×</span></div>`;
+        return`<div class="erow" id="erow-${cat.id}-${i}">
+          <span class="edate">${fmtDate(e.date)}</span>
+          ${avatarHtml}
+          <span class="edesc">${e.desc||'—'}</span>
+          <span class="eamt">${fmt(e.amount)}</span>
+          <span class="eedit" data-cat="${cat.id}" data-idx="${i}" title="Edit">✎</span>
+          <span class="edel" data-cat="${cat.id}" data-idx="${i}">×</span>
+        </div>`;
       }).join('')}</div>`;
     el.appendChild(div);
     div.querySelector('.cat-icon-btn').addEventListener('click',()=>openEmojiPicker(cat.id,div.querySelector('.cat-icon-btn')));
@@ -2089,11 +2099,12 @@ function renderCatCards(){
     div.querySelector('.fsub').addEventListener('click',()=>addEntry(cat.id));
     div.querySelector('#amt-'+cat.id).addEventListener('keydown',e=>{if(e.key==='Enter')addEntry(cat.id);});
     div.querySelectorAll('.edel').forEach(b=>b.addEventListener('click',()=>deleteEntry(b.dataset.cat,+b.dataset.idx)));
+    div.querySelectorAll('.eedit').forEach(b=>b.addEventListener('click',()=>editEntry(b.dataset.cat,+b.dataset.idx)));
   });
 }
 
 function commitRename(id,newName,nameText,nameInput,editBtn){
-  if(newName){appData.catNames[id]=newName;saveData();nameText.textContent=newName;showToast('Renamed to "'+newName+'"');renderChart();}
+  if(newName){appData.catNames[id]=newName;saveData('meta');nameText.textContent=newName;showToast('Renamed to "'+newName+'"');renderChart();}
   nameInput.style.display='none';nameText.style.display='';editBtn.textContent='✎';editBtn.style.opacity='';
 }
 function toggleForm(id){const f=document.getElementById('form-'+id);const open=f.classList.toggle('open');if(open)document.getElementById('desc-'+id).focus();}
@@ -2106,8 +2117,7 @@ function addEntry(id){
   dEl.value='';aEl.value='';dtEl.value=todayDateVal();
   const cat=getCats().find(c=>c.id===id);
   logActivity('add',`added ${fmt(amt)} to ${cat?.icon||''} ${cat?.name||id} — "${entry.desc}"`);
-  saveData();render();
-  // flash the card
+  saveData('month');render();
   const card=document.getElementById('ccard-'+id);
   if(card){card.classList.remove('new-entry');void card.offsetWidth;card.classList.add('new-entry');}
   // update today panel
@@ -2119,7 +2129,43 @@ function deleteEntry(id,idx){
   const cat=getCats().find(c=>c.id===id);
   if(entry) logActivity('del',`removed ${fmt(entry.amount)} from ${cat?.icon||''} ${cat?.name||id} — "${entry.desc||'Expense'}"`);
   d.entries[id].splice(idx,1);
-  saveData();render();renderTodayPanel();
+  saveData('month');render();renderTodayPanel();
+}
+
+function editEntry(id,idx){
+  const erow=document.getElementById(`erow-${id}-${idx}`);
+  if(!erow)return;
+  const entry=getMonthData().entries[id]?.[idx];
+  if(!entry)return;
+  // replace the erow with an inline edit form
+  erow.innerHTML=`
+    <input type="text" class="finput" id="edit-desc-${id}-${idx}" value="${entry.desc||''}" placeholder="Description" style="flex:1;min-width:60px;padding:4px 7px;font-size:12px;height:28px;"/>
+    <input type="text" inputmode="decimal" class="finput amt" id="edit-amt-${id}-${idx}" value="${entry.amount}" placeholder="Amount" style="width:80px;padding:4px 7px;font-size:12px;height:28px;"/>
+    <input type="date" class="finput date" id="edit-date-${id}-${idx}" value="${entry.date||todayDateVal()}" style="width:120px;padding:4px 7px;font-size:12px;height:28px;"/>
+    <button class="fsub" id="edit-save-${id}-${idx}" style="padding:4px 10px;font-size:11px;height:28px;">Save</button>
+    <button class="edel" id="edit-cancel-${id}-${idx}" style="font-size:14px;color:var(--ink-3);background:none;border:none;cursor:pointer;">✕</button>`;
+  const saveBtn=document.getElementById(`edit-save-${id}-${idx}`);
+  const cancelBtn=document.getElementById(`edit-cancel-${id}-${idx}`);
+  saveBtn.addEventListener('click',()=>saveEditEntry(id,idx));
+  cancelBtn.addEventListener('click',()=>render());
+  document.getElementById(`edit-amt-${id}-${idx}`).addEventListener('keydown',e=>{if(e.key==='Enter')saveEditEntry(id,idx);if(e.key==='Escape')render();});
+  document.getElementById(`edit-desc-${id}-${idx}`).focus();
+}
+
+function saveEditEntry(id,idx){
+  const desc=document.getElementById(`edit-desc-${id}-${idx}`)?.value.trim();
+  const amtRaw=document.getElementById(`edit-amt-${id}-${idx}`)?.value;
+  const date=document.getElementById(`edit-date-${id}-${idx}`)?.value;
+  const amt=parseFloat((amtRaw||'0').replace(/,/g,'.'));
+  if(!amt||amt<=0){showToast('Enter a valid amount');return;}
+  const entry=getMonthData().entries[id]?.[idx];
+  if(!entry)return;
+  entry.desc=desc||'Expense';
+  entry.amount=amt;
+  entry.date=date||todayDateVal();
+  const cat=getCats().find(c=>c.id===id);
+  logActivity('edit',`edited entry in ${cat?.icon||''} ${cat?.name||id} — "${entry.desc}" ${fmt(amt)}`);
+  saveData('month');render();renderTodayPanel();showToast('Entry updated');
 }
 
 /* ══════════════════════════════════
@@ -2172,7 +2218,7 @@ function renderBudgetSetup(){
       <input class="setup-budget-input" type="number" id="bud-${c.id}" value="${d.budgets[c.id]||''}" placeholder="Budget" min="0"/>
       <button class="setup-del-btn" data-cat="${c.id}" title="Remove category">×</button>`;
     el.appendChild(row);
-    row.querySelector('.setup-emoji-btn').addEventListener('click',btn=>openEmojiPicker(c.id,btn.currentTarget));
+    row.querySelector('.setup-emoji-btn').addEventListener('click',e=>openEmojiPicker(c.id,e.currentTarget));
     row.querySelector('.setup-del-btn').addEventListener('click',()=>{
       if(cats.length<=1){showToast('Keep at least one category');return;}
       delete appData.catNames[c.id];delete appData.catIcons[c.id];
@@ -2222,7 +2268,7 @@ function buildEmojiGrid(){
   EMOJI_LIST.forEach(e=>{
     const btn=document.createElement('button');btn.className='emoji-opt';btn.textContent=e;
     btn.addEventListener('click',()=>{
-      if(emojiTargetId){appData.catIcons[emojiTargetId]=e;saveData();render();}
+      if(emojiTargetId){appData.catIcons[emojiTargetId]=e;saveData('meta');render();}
       closeEmojiPicker();
     });
     grid.appendChild(btn);
